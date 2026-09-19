@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>NLC Master Tactical Timer</title>
+    <!-- React & Babel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-orange': '#ff5500',
+                        'brand-orange-glow': 'rgba(255, 85, 0, 0.4)',
+                        'tactical-black': '#050505',
+                        'tactical-gray': '#111111',
+                        'premium-dark': '#0a0a0a',
+                        'accent-red': '#EF4444',
+                        'eq-blue': '#00d2ff',
+                        'eq-purple': '#8a2be2',
+                        'eq-pink': '#ff007f',
+                        'eq-orange': '#ff7700',
+                    },
+                    boxShadow: {
+                        'neon-orange': '0 0 20px rgba(255, 85, 0, 0.4), 0 0 40px rgba(255, 85, 0, 0.1)',
+                        'neon-white': '0 0 15px rgba(255, 255, 255, 0.2)',
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700;800&family=Oswald:wght@300;400;600;700&display=swap');
+        
+        body {
+            background-color: #000000;
+            color: #e5e5e5;
+            font-family: 'Inter', sans-serif;
+            overflow-x: hidden;
+            overflow-y: auto;
+            touch-action: manipulation;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        .font-header { font-family: 'Oswald', sans-serif; }
+        
+        /* Custom Animations */
+        @keyframes pulse-orange {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 85, 0, 0.4); }
+            70% { box-shadow: 0 0 0 20px rgba(255, 85, 0, 0); }
+        }
+        .animate-pulse-orange { animation: pulse-orange 2s infinite; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes slideUp { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes scaleIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        .animate-slide-up { animation: slideUp 0.4s ease-out forwards; }
+        .animate-scale-in { animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        /* Sleek Button Styling */
+        .btn-minimal {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #a0a0a0;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+            border-radius: 12px;
+        }
+        .btn-minimal:active { transform: scale(0.97); }
+        .btn-minimal.selected {
+            background: #ffffff;
+            border-color: #ffffff;
+            color: #000000;
+            font-weight: 600;
+        }
+
+        .text-glow-orange { text-shadow: 0 0 20px rgba(255,85,0,0.6); }
+        .text-glow-white { text-shadow: 0 0 20px rgba(255,255,255,0.4); }
+
+        /* SVG Circular Timer */
+        .timer-ring {
+            transition: stroke-dashoffset 1s linear;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+
+        ::-webkit-scrollbar { width: 4px; display: none;}
+        ::-webkit-scrollbar-track { background: #000; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div id="root" class="min-h-[100dvh] w-full relative z-10 flex flex-col"></div>
+
+    <script type="text/babel" data-presets="react,env">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // --- AUDIO ENGINES ---
+        const SoundFX = {
+            ctx: null,
+            init: () => {
+                if (!SoundFX.ctx) {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContext) SoundFX.ctx = new AudioContext();
+                }
+                if (SoundFX.ctx && SoundFX.ctx.state === 'suspended') SoundFX.ctx.resume();
+                return SoundFX.ctx;
+            },
+            play: (type) => {
+                const ctx = SoundFX.init();
+                if (!ctx) return;
+                
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                const now = ctx.currentTime;
+
+                switch (type) {
+                    case 'BEEP': 
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(800, now);
+                        gain.gain.setValueAtTime(0.5, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                        osc.start(now); osc.stop(now + 0.1);
+                        break;
+                    case 'GO': 
+                        osc.type = 'square';
+                        osc.frequency.setValueAtTime(1200, now);
+                        gain.gain.setValueAtTime(0.6, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                        osc.start(now); osc.stop(now + 0.5);
+                        break;
+                    case 'WORK': 
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(600, now);
+                        osc.frequency.exponentialRampToValueAtTime(1200, now + 0.1);
+                        gain.gain.setValueAtTime(0.5, now);
+                        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+                        osc.start(now); osc.stop(now + 0.5);
+                        break;
+                    case 'REST': 
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(150, now);
+                        osc.frequency.linearRampToValueAtTime(50, now + 0.3);
+                        gain.gain.setValueAtTime(0.6, now);
+                        gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+                        osc.start(now); osc.stop(now + 0.3);
+                        break;
+                    case 'SERIES': 
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(440, now);
+                        osc.frequency.setValueAtTime(660, now + 0.1);
+                        gain.gain.setValueAtTime(0.3, now);
+                        gain.gain.linearRampToValueAtTime(0.01, now + 0.5);
+                        osc.start(now); osc.stop(now + 0.5);
+                        break;
+                }
+            }
+        };
+
+        const SpeechEngine = {
+            prime: () => {
+                if ('speechSynthesis' in window) {
+                    const u = new SpeechSynthesisUtterance('');
+                    u.volume = 0;
+                    window.speechSynthesis.speak(u);
+                }
+            },
+            speak: (text) => {
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.rate = 1.05; 
+                    utterance.pitch = 0.9; 
+                    utterance.volume = 1;
+                    window.speechSynthesis.speak(utterance);
+                }
+            }
+        };
+
+        const useWakeLock = () => {
+            const [isLocked, setIsLocked] = useState(false);
+            const wakeLockRef = useRef(null);
+
+            const request = useCallback(async () => {
+                try {
+                    if ('wakeLock' in navigator) {
+                        wakeLockRef.current = await navigator.wakeLock.request('screen');
+                        setIsLocked(true);
+                        wakeLockRef.current.addEventListener('release', () => setIsLocked(false));
+                    }
+                } catch (err) {
+                    console.error('Wake Lock error:', err);
+                    setIsLocked(false);
+                }
+            }, []);
+
+            const release = useCallback(async () => {
+                if (wakeLockRef.current) {
+                    await wakeLockRef.current.release();
+                    wakeLockRef.current = null;
+                    setIsLocked(false);
+                }
+            }, []);
+
+            useEffect(() => {
+                const handleVisibility = () => {
+                    if (document.visibilityState === 'visible') request();
+                };
+                document.addEventListener('visibilitychange', handleVisibility);
+                return () => {
+                    release();
+                    document.removeEventListener('visibilitychange', handleVisibility);
+                };
+            }, [request, release]);
+
+            return { isLocked, request, release };
+        };
+
+        const Footer = () => (
+            <div className="w-full text-center pb-6 pt-4 mt-auto border-t border-white/5">
+                <span className="text-[10px] font-mono tracking-[0.4em] text-gray-500 uppercase opacity-60">
+                    Adapt. Recover. Master.
+                </span>
+            </div>
+        );
+
+        // --- GLOBAL TASK TRACKER EQUALIZER ---
+        const TaskEqualizer = ({ masterPlan, currentBlockId }) => {
+            const eqColors = ['bg-eq-blue', 'bg-eq-purple', 'bg-eq-pink', 'bg-eq-orange'];
+
+            return (
+                <div className="w-full max-w-xs mx-auto flex items-end justify-between gap-2 h-10 mb-2">
+                    {masterPlan.map((block, i) => {
+                        let heightClass = 'h-1';
+                        let bgClass = 'bg-gray-800';
+                        let animClass = '';
+                        let shadowClass = '';
+
+                        if (block.skipped) {
+                            heightClass = 'h-1 opacity-30';
+                            bgClass = 'bg-gray-800';
+                        } else if (block.completed) {
+                            heightClass = 'h-full';
+                            bgClass = eqColors[i];
+                            shadowClass = `shadow-[0_0_10px_${eqColors[i]}]`;
+                        } else if (block.id === currentBlockId) {
+                            heightClass = 'h-1/2';
+                            bgClass = eqColors[i];
+                            animClass = 'animate-pulse';
+                        } else {
+                            heightClass = 'h-2';
+                            bgClass = 'bg-gray-700';
+                        }
+
+                        return (
+                            <div key={block.id} className="flex-1 flex flex-col justify-end items-center h-full relative group">
+                                <div className={`w-full rounded-sm transition-all duration-700 ${heightClass} ${bgClass} ${animClass} ${shadowClass}`}></div>
+                                <span className="absolute -bottom-5 text-[8px] font-mono text-gray-500 uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                    {block.name}
+                                </span>
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        };
+
+        // --- SETUP WIZARD (GATEWAY -> ENGINE) ---
+        const SetupWizard = ({ onLaunch }) => {
+            const [step, setStep] = useState(1);
+            
+            // ISO Configs
+            const [isoConfigs, setIsoConfigs] = useState({
+                splitSquat: { duration: 2, weighted: false, skipped: false },
+                pressUp: { duration: 2, weighted: false, skipped: false },
+                ankleHold: { duration: 2, weighted: false, skipped: false },
+            });
+
+            const updateIso = (key, field, val) => {
+                setIsoConfigs(prev => ({
+                    ...prev,
+                    [key]: { ...prev[key], [field]: val }
+                }));
+            };
+
+            // Engine Configs
+            const [engineType, setEngineType] = useState('Q&D'); 
+            const [qdExercise, setQdExercise] = useState('B'); 
+            const [qdProtocol, setQdProtocol] = useState('5/4');
+            const [qdRolled, setQdRolled] = useState(false);
+            const [qdSeriesTarget, setQdSeriesTarget] = useState(0);
+            
+            const [axeMins, setAxeMins] = useState(15);
+            
+            const [dfwMins, setDfwMins] = useState(20);
+            const [dfwRolled, setDfwRolled] = useState(false);
+            const [dfwEquip, setDfwEquip] = useState('');
+            const [dfwIntensity, setDfwIntensity] = useState('');
+
+            // Dice Logic
+            const rollQd = () => {
+                SoundFX.init();
+                const roll = Math.floor(Math.random() * 6) + 1;
+                let s = 2;
+                if (roll === 1) s = 2;
+                else if (roll <= 3) s = 3;
+                else if (roll <= 5) s = 4;
+                else s = 5;
+                setQdSeriesTarget(s);
+                setQdRolled(true);
+                SoundFX.play('SERIES');
+            };
+
+            const rollDfw = () => {
+                SoundFX.init();
+                const isDouble = Math.random() > 0.5;
+                const rollInt = Math.floor(Math.random() * 6) + 1;
+                
+                setDfwEquip(isDouble ? 'Double KB' : 'Single KB');
+                if (rollInt <= 2) setDfwIntensity('RPE 5 (Light)');
+                else if (rollInt <= 4) setDfwIntensity('RPE 7 (Medium)');
+                else setDfwIntensity('RPE 8 (Heavy)');
+
+                setDfwRolled(true);
+                SoundFX.play('SERIES');
+            };
+
+            const handleNext = () => {
+                setStep(s => s + 1);
+            };
+
+            const handleLaunch = () => {
+                SpeechEngine.prime();
+                SoundFX.init();
+
+                const masterPlan = [
+                    { id: 'iso_1', type: 'ISO', name: 'Split Squat', duration: isoConfigs.splitSquat.duration, weighted: isoConfigs.splitSquat.weighted, skipped: isoConfigs.splitSquat.skipped, completed: false },
+                    { id: 'iso_2', type: 'ISO', name: 'Press Up', duration: isoConfigs.pressUp.duration, weighted: false, skipped: isoConfigs.pressUp.skipped, completed: false },
+                    { id: 'iso_3', type: 'ISO', name: 'Ankle Hold', duration: isoConfigs.ankleHold.duration, weighted: isoConfigs.ankleHold.weighted, skipped: isoConfigs.ankleHold.skipped, completed: false },
+                    { 
+                        id: 'engine_1',
+                        type: 'ENGINE', 
+                        name: engineType,
+                        skipped: false,
+                        completed: false,
+                        config: engineType === 'Q&D' 
+                            ? { exercise: qdExercise, protocol: qdProtocol, seriesCount: qdSeriesTarget }
+                            : engineType === 'AXE' 
+                            ? { duration: axeMins } 
+                            : { duration: dfwMins, equipment: dfwEquip, intensity: dfwIntensity }
+                    }
+                ];
+
+                onLaunch(masterPlan);
+            };
+
+            const renderIsoStep = (title, key, allowWeighted, stepNum) => {
+                const config = isoConfigs[key];
+                const times = allowWeighted ? [1, 2, 3, 4, 5] : [2, 3, 4, 5];
+                const warning = config.duration === 1 && allowWeighted && !config.weighted && !config.skipped;
+                
+                return (
+                    <div className="animate-fade-in flex flex-col h-full">
+                        <div className="text-center mb-6">
+                            <h2 className="text-gray-500 font-mono text-[10px] tracking-[0.2em] uppercase mb-1">Gateway Block {stepNum}/3</h2>
+                            <h1 className="text-3xl font-header font-bold text-white uppercase">{title}</h1>
+                        </div>
+
+                        <div className="glass-panel p-4 mb-6 bg-white/5 border border-white/10 rounded-2xl">
+                            <div className="flex items-center justify-between mb-4">
+                                <span className="text-xs font-bold text-gray-300 uppercase tracking-widest">Execute Block?</span>
+                                <div className="flex gap-2">
+                                    <button onClick={() => updateIso(key, 'skipped', false)} className={`px-4 py-2 text-[10px] uppercase font-bold tracking-widest rounded-lg transition-all ${!config.skipped ? 'bg-brand-orange text-white' : 'bg-gray-800 text-gray-500'}`}>Yes</button>
+                                    <button onClick={() => updateIso(key, 'skipped', true)} className={`px-4 py-2 text-[10px] uppercase font-bold tracking-widest rounded-lg transition-all ${config.skipped ? 'bg-gray-700 text-white' : 'bg-gray-900 text-gray-500'}`}>Skip</button>
+                                </div>
+                            </div>
+
+                            {!config.skipped && (
+                                <div className="animate-slide-up">
+                                    <label className="text-[10px] font-semibold text-gray-400 uppercase mb-3 block tracking-widest mt-4">Target Duration</label>
+                                    <div className="flex gap-2 mb-4">
+                                        {times.map(m => (
+                                            <button key={m} onClick={() => { updateIso(key, 'duration', m); if(m!==1 && allowWeighted) updateIso(key, 'weighted', false); }} className={`btn-minimal flex-1 py-3 text-sm ${config.duration === m ? 'selected' : ''}`}>{m}M</button>
+                                        ))}
+                                    </div>
+
+                                    {allowWeighted && config.duration === 1 && (
+                                        <div className="mt-4 p-4 border border-brand-orange/30 rounded-xl bg-orange-900/10">
+                                            <div className="flex items-center justify-between cursor-pointer" onClick={() => updateIso(key, 'weighted', !config.weighted)}>
+                                                <div>
+                                                    <span className="text-xs font-semibold text-white uppercase tracking-widest block">Add Weight</span>
+                                                    <span className="text-[10px] text-gray-400 font-mono">Mandatory for 1 min duration</span>
+                                                </div>
+                                                <div className={`w-12 h-6 rounded-full relative transition-all duration-300 ${config.weighted ? 'bg-brand-orange shadow-neon-orange' : 'bg-gray-800'}`}>
+                                                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all duration-300 ${config.weighted ? 'left-7' : 'left-1 shadow-sm'}`}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-auto pt-4 border-t border-white/5">
+                            <button 
+                                disabled={warning}
+                                onClick={handleNext}
+                                className="w-full py-4 bg-white text-black font-bold text-xs uppercase tracking-widest rounded-xl hover:scale-[1.02] disabled:opacity-30 disabled:scale-100 transition-all duration-300 shadow-lg"
+                            >
+                                Confirm & Proceed
+                            </button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderEngineStep = () => (
+                <div className="animate-fade-in flex flex-col h-full">
+                    <div className="text-center mb-6">
+                        <h2 className="text-gray-500 font-mono text-[10px] tracking-[0.2em] uppercase mb-1">Final Block 4/4</h2>
+                        <h1 className="text-3xl font-header font-bold text-brand-orange text-glow-orange uppercase">Select Engine</h1>
+                    </div>
+
+                    <div className="flex gap-2 border-b border-white/10 overflow-x-auto pb-2 scrollbar-hide mb-6">
+                        {['Q&D', 'AXE', 'DFW'].map(tab => (
+                            <button key={tab} onClick={() => { setEngineType(tab); setQdRolled(false); setDfwRolled(false); }} className={`text-xs md:text-sm font-header uppercase tracking-widest whitespace-nowrap flex-1 text-center py-2 transition-all ${engineType === tab ? 'text-white border-b-2 border-brand-orange' : 'text-gray-600 hover:text-gray-400'}`}>
+                                {tab}
+                            </button>
+                        ))}
+                    </div>
+
+                    {engineType === 'Q&D' && (
+                        <div className="space-y-6 animate-fade-in flex-1">
+                            <div>
+                                <label className="text-[10px] font-semibold text-gray-400 uppercase mb-3 block tracking-widest">Movement Pattern</label>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setQdExercise('A')} className={`btn-minimal flex-1 py-4 text-xs ${qdExercise === 'A' ? 'selected' : ''}`}>Swings + Pushups</button>
+                                    <button onClick={() => setQdExercise('B')} className={`btn-minimal flex-1 py-4 text-xs ${qdExercise === 'B' ? 'selected' : ''}`}>Snatch (L/R)</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-semibold text-gray-400 uppercase mb-3 block tracking-widest">Protocol</label>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setQdProtocol('5/4')} className={`btn-minimal flex-1 py-3 ${qdProtocol === '5/4' ? 'selected' : ''}`}>
+                                        <span className="text-sm font-header block">5/4</span><span className="text-[10px] opacity-70">Power</span>
+                                    </button>
+                                    <button onClick={() => setQdProtocol('10/2')} className={`btn-minimal flex-1 py-3 ${qdProtocol === '10/2' ? 'selected' : ''}`}>
+                                        <span className="text-sm font-header block">10/2</span><span className="text-[10px] opacity-70">Mass</span>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-4">
+                                {!qdRolled ? (
+                                    <button onClick={rollQd} className="w-full py-4 bg-gray-800 text-white font-semibold text-xs uppercase tracking-widest rounded-xl hover:bg-gray-700 transition-all shadow-lg border border-white/10">
+                                        Roll Series Dice
+                                    </button>
+                                ) : (
+                                    <div className="animate-scale-in p-4 bg-orange-900/20 border border-brand-orange/50 rounded-xl text-center shadow-neon-orange">
+                                        <div className="text-[10px] font-mono text-gray-400 uppercase tracking-widest mb-1">Target Acquired</div>
+                                        <div className="text-2xl font-header font-bold text-white">{qdSeriesTarget} <span className="text-brand-orange text-lg">SERIES</span></div>
+                                        <div className="text-xs text-gray-400 mt-1">{qdSeriesTarget * 20} Total Reps</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {engineType === 'AXE' && (
+                        <div className="space-y-6 animate-fade-in flex-1">
+                            <label className="text-[10px] font-semibold text-gray-400 uppercase mb-3 block tracking-widest">EMOM Duration</label>
+                            <div className="flex gap-2">
+                                {[10, 15, 20, 30].map(m => (
+                                    <button key={m} onClick={() => setAxeMins(m)} className={`btn-minimal flex-1 py-4 text-sm ${axeMins === m ? 'selected' : ''}`}>{m}M</button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {engineType === 'DFW' && (
+                        <div className="space-y-6 animate-fade-in flex-1">
+                            <div>
+                                <label className="text-[10px] font-semibold text-gray-400 uppercase mb-3 block tracking-widest">Time Domain</label>
+                                <div className="flex gap-2">
+                                    {[20, 30].map(m => (
+                                        <button key={m} onClick={() => setDfwMins(m)} className={`btn-minimal flex-1 py-4 text-sm ${dfwMins === m ? 'selected' : ''}`}>{m}M</button>
+                                    ))}
+                                </div>
+                            </div>
+                            
+                            <div className="mt-4">
+                                {!dfwRolled ? (
+                                    <button onClick={rollDfw} className="w-full py-4 bg-gray-800 text-white font-semibold text-xs uppercase tracking-widest rounded-xl hover:bg-gray-700 transition-all shadow-lg border border-white/10">
+                                        Roll Load Dice
+                                    </button>
+                                ) : (
+                                    <div className="animate-scale-in p-4 bg-orange-900/20 border border-brand-orange/50 rounded-xl text-center shadow-neon-orange">
+                                        <div className="text-[10px] font-mono text-gray-400 uppercase tracking-widest mb-1">Load Acquired</div>
+                                        <div className="text-xl font-header font-bold text-white uppercase italic">{dfwEquip}</div>
+                                        <div className="text-xs text-brand-orange font-bold uppercase tracking-widest mt-1">{dfwIntensity}</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="mt-auto pt-4 border-t border-white/5">
+                        <button 
+                            disabled={(engineType === 'Q&D' && !qdRolled) || (engineType === 'DFW' && !dfwRolled)}
+                            onClick={handleLaunch} 
+                            className="w-full py-4 bg-brand-orange text-white font-bold text-xs uppercase tracking-widest rounded-xl hover:bg-[#ff7700] hover:shadow-neon-orange disabled:opacity-30 disabled:scale-100 transition-all duration-300"
+                        >
+                            Execute Protocol
+                        </button>
+                    </div>
+                </div>
+            );
+
+            return (
+                <div className="h-full flex flex-col p-6 max-w-lg mx-auto w-full z-20 relative bg-black">
+                    <div className="flex justify-center mb-6">
+                        <img src="logo.png" alt="NLC Logo" className="w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-white/10 shadow-[0_0_20px_rgba(255,255,255,0.1)] object-cover" />
+                    </div>
+                    
+                    {step === 1 && renderIsoStep("Split Squat", 'splitSquat', true, 1)}
+                    {step === 2 && renderIsoStep("Press Up", 'pressUp', false, 2)}
+                    {step === 3 && renderIsoStep("Ankle Hold", 'ankleHold', true, 3)}
+                    {step === 4 && renderEngineStep()}
+                    
+                    <Footer />
+                </div>
+            );
+        };
+
+        // --- ACTIVE SESSION ---
+        const ActiveSession = ({ masterPlan, onFinish, onCancel }) => {
+            // Filter plan down to executable steps
+            const execPlan = masterPlan.filter(p => !p.skipped);
+            
+            const [stageIndex, setStageIndex] = useState(0);
+            const currentStage = execPlan[stageIndex];
+            
+            // Sync overall plan status for the EQ Tracker
+            const currentPlanStatus = masterPlan.map(block => {
+                const execIndex = execPlan.findIndex(ep => ep.id === block.id);
+                if (block.skipped) return { ...block, status: 'SKIPPED' };
+                if (execIndex < stageIndex) return { ...block, completed: true };
+                return block;
+            });
+
+            const [time, setTime] = useState(0); 
+            const [globalStatus, setGlobalStatus] = useState(execPlan.length > 0 ? 'COUNTDOWN' : 'COMPLETE'); 
+            const [countdown, setCountdown] = useState(3);
+            const [show5MinPrompt, setShow5MinPrompt] = useState(false);
+            
+            // Sub-block states for specific Engines
+            const [engineBlock, setEngineBlock] = useState('READY');
+            const [qdSeries, setQdSeries] = useState(1);
+            
+            const intervalRef = useRef(null);
+            const { isLocked, request: requestLock } = useWakeLock();
+
+            // Total target duration in seconds for current stage
+            const getTargetSeconds = () => {
+                if (!currentStage) return 0;
+                if (currentStage.type === 'ISO') return currentStage.duration * 60;
+                if (currentStage.type === 'ENGINE') {
+                    if (currentStage.name === 'Q&D') {
+                        return currentStage.config.exercise === 'A' ? 180 * currentStage.config.seriesCount : 240 * currentStage.config.seriesCount;
+                    }
+                    return currentStage.config.duration * 60;
+                }
+                return 0;
+            };
+
+            const targetSeconds = getTargetSeconds();
+            const remaining = Math.max(0, targetSeconds - time);
+
+            useEffect(() => {
+                requestLock();
+                if (execPlan.length === 0) onFinish(masterPlan.map(b => ({...b, completed: true}))); // Edge case all skipped
+            }, [requestLock, execPlan.length, masterPlan, onFinish]);
+
+            // Timer Loop
+            useEffect(() => {
+                if (globalStatus === 'COUNTDOWN') {
+                    intervalRef.current = setInterval(() => {
+                        setCountdown(c => {
+                            if (c > 1) {
+                                SoundFX.play('BEEP');
+                                return c - 1;
+                            }
+                            clearInterval(intervalRef.current);
+                            SoundFX.play('GO');
+                            setGlobalStatus('ACTIVE');
+                            SpeechEngine.speak(currentStage.type === 'ISO' ? `${currentStage.name}. Hold position.` : `Engine block. ${currentStage.name}. Go.`);
+                            return 0;
+                        });
+                    }, 1000);
+                } else if (globalStatus === 'ACTIVE') {
+                    intervalRef.current = setInterval(() => {
+                        setTime(t => t + 1);
+                    }, 1000);
+                } else {
+                    clearInterval(intervalRef.current);
+                }
+                return () => clearInterval(intervalRef.current);
+            }, [globalStatus, currentStage]);
+
+            // Logic per second
+            useEffect(() => {
+                if (globalStatus !== 'ACTIVE' || !currentStage) return;
+
+                // 5 Minute Warning for Long Engine Blocks
+                if (currentStage.type === 'ENGINE' && currentStage.name !== 'Q&D' && remaining === 300) {
+                    SpeechEngine.speak("Focus on technique, keep your skills sharp.");
+                    setShow5MinPrompt(true);
+                    setTimeout(() => setShow5MinPrompt(false), 8000);
+                }
+
+                // Completion check
+                if (time >= targetSeconds && targetSeconds > 0) {
+                    if (stageIndex < execPlan.length - 1) {
+                        setGlobalStatus('COUNTDOWN');
+                        setCountdown(3);
+                        setTime(0);
+                        setStageIndex(i => i + 1);
+                        SpeechEngine.speak("Block complete. Prepare for next.");
+                    } else {
+                        setGlobalStatus('COMPLETE');
+                        SpeechEngine.speak("Workout complete. Outstanding effort.");
+                        
+                        // Pass final status back
+                        const finalPlan = masterPlan.map(block => {
+                            if (block.skipped) return block;
+                            return { ...block, completed: true };
+                        });
+                        onFinish(finalPlan);
+                    }
+                    return;
+                }
+
+                // Q&D Sub-logic
+                if (currentStage.type === 'ENGINE' && currentStage.name === 'Q&D') {
+                    const SERIES_DUR = currentStage.config.exercise === 'A' ? 180 : 240;
+                    const timeInSeries = time % SERIES_DUR;
+                    const triggers = currentStage.config.protocol === '5/4' ? [0, 30, 60, 90] : [0, 60];
+                    const deepRest = currentStage.config.protocol === '5/4' ? 120 : 90;
+                    
+                    if (time > 0 && timeInSeries === 0) setQdSeries(s => s + 1);
+
+                    if (triggers.includes(timeInSeries)) {
+                        setEngineBlock('WORK');
+                        SoundFX.play('WORK');
+                    } else if (timeInSeries >= deepRest) {
+                        setEngineBlock('DEEP REST');
+                    } else {
+                        const timeSinceTrigger = Math.min(...triggers.map(t => timeInSeries - t).filter(d => d >= 0));
+                        if (timeSinceTrigger === 20 && engineBlock === 'WORK') {
+                            setEngineBlock('RECOVER');
+                            SoundFX.play('REST');
+                        }
+                    }
+                    
+                    const nextTrigger = triggers.find(t => t > timeInSeries) || SERIES_DUR;
+                    if (nextTrigger - timeInSeries <= 3 && nextTrigger - timeInSeries > 0) SoundFX.play('BEEP');
+                }
+
+                // AXE Sub-logic
+                if (currentStage.type === 'ENGINE' && currentStage.name === 'AXE') {
+                    const emomTime = time % 60;
+                    if (emomTime === 55) SpeechEngine.speak("Five seconds.");
+                    if (emomTime === 0 && time > 0) { setEngineBlock('WORK'); SoundFX.play('WORK'); }
+                    if (emomTime === 8) setEngineBlock('REST');
+                    if (emomTime > 56 && emomTime < 60) SoundFX.play('BEEP');
+                }
+            }, [time, globalStatus, currentStage, remaining, targetSeconds, stageIndex, execPlan.length, onFinish, engineBlock, masterPlan]);
+
+            if (!currentStage) return null; // Safe guard
+
+            const formatTime = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
+            const progressPct = targetSeconds > 0 ? (time / targetSeconds) * 100 : 0;
+
+            return (
+                <div className="h-full flex flex-col items-center justify-between p-6 max-w-lg mx-auto w-full relative z-20 bg-black">
+                    
+                    {/* Header with Global Task Tracker */}
+                    <div className="w-full mb-6">
+                        <TaskEqualizer masterPlan={currentPlanStatus} currentBlockId={currentStage.id} />
+                        
+                        <div className="flex justify-between items-end mt-6 border-b border-white/10 pb-4">
+                            <div className="flex items-center gap-3">
+                                <img src="logo.png" alt="Logo" className="w-12 h-12 rounded-full border border-white/10 object-cover" />
+                                <div>
+                                    <h2 className="text-white font-header text-xl uppercase leading-none tracking-wide">{currentStage.name}</h2>
+                                    <p className="text-[10px] font-mono text-brand-orange uppercase tracking-widest mt-1">{currentStage.type} PHASE {stageIndex + 1}/{execPlan.length}</p>
+                                </div>
+                            </div>
+                            {currentStage.weighted && <span className="text-[10px] bg-white text-black px-2 py-1 rounded-sm font-bold uppercase tracking-widest">Weighted</span>}
+                        </div>
+                    </div>
+
+                    {/* Main UI Area */}
+                    <div className="flex-1 flex flex-col items-center justify-center relative w-full mt-4">
+                        
+                        {/* 5 Min Overlay */}
+                        {show5MinPrompt && (
+                            <div className="absolute top-0 left-0 w-full z-50 animate-scale-in text-center p-4 bg-brand-orange/20 border border-brand-orange rounded-xl backdrop-blur-md shadow-neon-orange">
+                                <p className="text-white font-header text-xl uppercase italic tracking-wide">"Focus on technique.</p>
+                                <p className="text-white font-header text-xl uppercase italic tracking-wide">Keep your skills sharp."</p>
+                            </div>
+                        )}
+
+                        {globalStatus === 'COUNTDOWN' ? (
+                            <div className="animate-scale-in flex flex-col items-center">
+                                <div className="text-9xl font-header font-bold text-white text-glow-white mb-4">{countdown}</div>
+                                <div className="text-brand-orange tracking-[0.3em] uppercase text-sm font-semibold">Prepare to execute</div>
+                            </div>
+                        ) : (
+                            <div className="relative flex items-center justify-center animate-fade-in w-72 h-72 sm:w-80 sm:h-80">
+                                {/* SVG Circular Progress */}
+                                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100">
+                                    <circle cx="50" cy="50" r="46" fill="none" stroke="#111" strokeWidth="2" />
+                                    <circle 
+                                        cx="50" cy="50" r="46" fill="none" 
+                                        stroke={currentStage.type === 'ENGINE' ? '#fff' : '#ff5500'} 
+                                        strokeWidth="4" 
+                                        strokeLinecap="round"
+                                        className="timer-ring drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]"
+                                        strokeDasharray="289"
+                                        strokeDashoffset={289 - (289 * progressPct) / 100}
+                                    />
+                                </svg>
+                                
+                                {/* Inner Text */}
+                                <div className="flex flex-col items-center justify-center z-10 text-center">
+                                    <div className="text-6xl sm:text-7xl font-mono font-bold text-white tracking-tighter" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                                        {formatTime(remaining)}
+                                    </div>
+                                    
+                                    {currentStage.type === 'ENGINE' && (
+                                        <div className="mt-4">
+                                            <div className={`text-xl sm:text-2xl font-header uppercase italic font-bold tracking-widest ${engineBlock === 'WORK' ? 'text-brand-orange text-glow-orange' : 'text-gray-400'}`}>
+                                                {engineBlock}
+                                            </div>
+                                            {currentStage.name === 'Q&D' && <div className="text-xs text-gray-500 font-mono mt-1">SERIES {qdSeries} / {currentStage.config.seriesCount}</div>}
+                                            {currentStage.name === 'AXE' && <div className="text-xs text-gray-500 font-mono mt-1">EMOM / {currentStage.config.duration}M</div>}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="w-full mt-8">
+                        <div className="flex gap-4 mb-4">
+                            <button 
+                                onClick={() => setGlobalStatus(globalStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE')} 
+                                disabled={globalStatus === 'COUNTDOWN'}
+                                className={`flex-1 py-4 font-bold uppercase tracking-widest text-xs rounded-xl transition-all border ${globalStatus === 'ACTIVE' ? 'bg-black text-white border-white/20 hover:bg-white/10' : 'bg-white text-black border-white hover:bg-gray-200 shadow-neon-white'}`}
+                            >
+                                {globalStatus === 'ACTIVE' ? 'Pause' : 'Resume'}
+                            </button>
+                        </div>
+                        <div className="text-center mb-6">
+                            <button onClick={onCancel} className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest hover:text-white px-6 py-2 transition-colors underline">
+                                Abort Workout
+                            </button>
+                        </div>
+                        <Footer />
+                    </div>
+                </div>
+            );
+        };
+
+        // --- SUMMARY ---
+        const Summary = ({ finalPlan, onReset }) => (
+            <div className="h-full flex flex-col p-6 max-w-lg mx-auto w-full justify-center text-center animate-fade-in z-20 relative bg-black">
+                <div className="flex-1 flex flex-col justify-center">
+                    <img src="logo.png" alt="NLC Logo" className="w-28 h-28 mx-auto rounded-full ring-2 ring-white/10 mb-8 object-cover shadow-[0_0_30px_rgba(255,255,255,0.1)]" />
+                    <h1 className="text-4xl sm:text-5xl font-header font-bold text-white mb-2 uppercase tracking-wide text-glow-white">Mission<br/>Accomplished</h1>
+                    <p className="text-brand-orange font-mono text-xs uppercase tracking-widest mb-10">Parameters Executed</p>
+                    
+                    <div className="mb-10 w-full max-w-xs mx-auto">
+                        <TaskEqualizer masterPlan={finalPlan} currentBlockId={null} />
+                        <div className="text-[10px] text-gray-500 uppercase font-mono tracking-widest mt-4">Final Task Eq</div>
+                    </div>
+                    
+                    <button onClick={onReset} className="w-full max-w-xs mx-auto py-4 bg-white text-black font-bold uppercase text-xs tracking-widest rounded-xl hover:scale-[1.02] transition-all shadow-lg">
+                        Return to Gateway
+                    </button>
+                </div>
+                <Footer />
+            </div>
+        );
+
+        // --- APP ROOT ---
+        const App = () => {
+            const [view, setView] = useState('SETUP'); 
+            const [masterPlan, setMasterPlan] = useState([]);
+
+            const handleLaunch = (plan) => {
+                setMasterPlan(plan);
+                setView('WORKOUT');
+            };
+
+            const handleFinish = (finalPlan) => {
+                setMasterPlan(finalPlan);
+                setView('SUMMARY');
+            };
+            
+            const handleCancel = () => setView('SETUP');
+
+            return (
+                <div className="w-full h-full bg-black">
+                    {view === 'SETUP' && <SetupWizard onLaunch={handleLaunch} />}
+                    {view === 'WORKOUT' && <ActiveSession masterPlan={masterPlan} onFinish={handleFinish} onCancel={handleCancel} />}
+                    {view === 'SUMMARY' && <Summary finalPlan={masterPlan} onReset={handleCancel} />}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
